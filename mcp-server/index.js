@@ -14,6 +14,7 @@ auf dem Boden hat seinen Mittelpunkt bei y = 105. Die erste Spalte hat x = 15,
 die naechste x = 45 usw. (Mittelpunkt = 30 * Spalte + 15).
 Haeufige Objekt-IDs: 1 = normaler Block, 8 = Stachel, 35 = gelbes Sprungpad,
 36 = gelber Sprung-Orb, 12 = Wuerfel-Portal, 13 = Schiff-Portal.
+Feste Bloecke (z. B. ID 1) speichert GD nur in 90-Grad-Schritten; Deko und Stacheln gehen frei.
 Jedes Objekt hat eine "uid" (eindeutige Nummer). Damit verschiebst/aenderst/loeschst du es.
 Nach gd_modify_objects bekommen Objekte NEUE uids (stehen in newUids).
 Lies vor groesseren Aenderungen mit gd_get_level_info und gd_list_objects nach, was da ist.

@@ -68,7 +68,7 @@ export async function callGD(cmd, params = {}, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`Zeitueberschreitung bei "${cmd}". Ist das Spiel eingefroren oder pausiert?`));
+      reject(new Error(`Zeitueberschreitung bei "${cmd}". Ist das Geometry-Dash-Fenster minimiert? Dann pausiert GD und die Mod kann nicht antworten. Fenster wiederherstellen (nicht minimieren, daneben legen ist ok).`));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     ws.send(JSON.stringify({ id, cmd, params }));
