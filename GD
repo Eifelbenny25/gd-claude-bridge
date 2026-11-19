@@ -1,0 +1,191 @@
+build/
+node_modules/
+
+# Claude Bridge: Anleitung
+
+Claude Desktop ⇄ MCP-Server (Node.js, `mcp-server/`) ⇄ WebSocket `ws://127.0.0.1:1414` ⇄ Geode-Mod (C++, `src/`) ⇄ GD-Editor
+
+Ein API-Schlüssel ist nicht nötig. Claude Desktop startet den MCP-Server selbst, und dein normales Claude-Konto reicht.
+
+## Was im Ordner liegt
+
+| Datei | Wozu |
+|---|---|
+| `mod.json` | Steckbrief der Mod (Name, ID, GD-Version, Port-Einstellung) |
+| `CMakeLists.txt` | Bauanleitung für den Compiler. Lädt die WebSocket-Bibliothek (websocketpp + asio) automatisch herunter |
+| `src/Server.cpp/.hpp` | WebSocket-Server, nur auf 127.0.0.1, eigener Thread |
+| `src/main.cpp` | Startet den Server und arbeitet die Befehle jeden Frame im Haupt-Thread ab |
+| `src/Commands.cpp/.hpp` | Die Befehle (Level-Info, Objekte lesen/hinzufügen/ändern/löschen, Farben) |
+| `.github/workflows/build.yml` | GitHub baut daraus die `.geode`-Datei |
+| `mcp-server/` | Node.js-Programm für Claude Desktop |
+
+## 1. Auf GitHub hochladen und bauen
+
+1. Auf github.com oben rechts auf **+** → **New repository** klicken.
+   Name z. B. `gd-claude-bridge`, **Public** oder Private, dann **Create repository**.
+2. Auf der leeren Repo-Seite auf den Link **uploading an existing file** klicken.
+3. Den Ordner `gd-claude-bridge` im Explorer öffnen, **alles darin** markieren (Strg+A) und
+   ins Browserfenster ziehen. Das schließt den Ordner `.github`, `src` und `mcp-server` ein.
+   Einen Ordner `node_modules` darfst du nicht mit hochladen, falls du schon `npm install` ausgeführt hast.
+4. Unten auf **Commit changes** klicken.
+5. Kontrolle: Im Repo muss der Pfad `.github/workflows/build.yml` existieren.
+   Falls `.github` fehlt, gehst du auf **Add file → Create new file**, tippst als Namen
+   `.github/workflows/build.yml` und kopierst den Inhalt der Datei hinein.
+6. Oben auf den Reiter **Actions** klicken. Dort läuft "Build Geode Mod" (gelber Kreis).
+   Das dauert etwa 5–10 Minuten. Ein grüner Haken heißt fertig, ein rotes X heißt Fehler.
+   Dann auf den Lauf klicken und den Fehlertext kopieren.
+7. Beim grünen Lauf unten unter **Artifacts** auf `claude-bridge-mod` klicken. Du bekommst eine ZIP-Datei,
+   darin liegt `local.claude-bridge.geode`.
+
+## 2. Die .geode-Datei installieren
+
+1. GD-Ordner öffnen: In Steam Rechtsklick auf Geometry Dash → **Verwalten** → **Lokale Dateien durchsuchen**.
+2. Die Datei `local.claude-bridge.geode` nach `geode\mods\` kopieren.
+3. GD neu starten. Im Geode-Menü (grüner Knopf im Hauptmenü) sollte jetzt "Claude Bridge" stehen.
+
+Geode sollte auf dem neuesten Stand für GD 2.2081 sein (5.x). Wenn GD meldet, die Mod
+brauche eine neuere Geode-Version, aktualisiere Geode.
+
+## 3. MCP-Server einrichten
+
+1. Node.js (LTS) von https://nodejs.org installieren, falls noch nicht geschehen.
+   Danach eine **neue** PowerShell öffnen und `node --version` eingeben. Es muss eine Version erscheinen.
+2. In PowerShell in den Ordner `mcp-server` wechseln und die Pakete installieren:
+   ```powershell
+   cd "C:\Pfad\zu\gd-claude-bridge\mcp-server"
+   npm install
+   ```
+3. In der Claude-Desktop-App: **Einstellungen → Entwickler → Konfiguration bearbeiten**.
+   Das öffnet `claude_desktop_config.json` (liegt normalerweise unter `%APPDATA%\Claude\`).
+4. Folgendes eintragen und den Pfad anpassen. Wichtig: **doppelte** Backslashes `\\` verwenden.
+   ```json
+   {
+     "mcpServers": {
+       "geometry-dash": {
+         "command": "node",
+         "args": ["C:\\Pfad\\zu\\gd-claude-bridge\\mcp-server\\index.js"]
+       }
+     }
+   }
+   ```
+   Wenn schon etwas in der Datei steht, kommt `"geometry-dash": {...}` zusätzlich in den
+   vorhandenen `"mcpServers"`-Block. Einträge werden durch Kommas getrennt.
+5. Claude Desktop **komplett beenden** (auch das Symbol unten rechts in der Taskleiste) und neu starten.
+
+## 4. Testen
+
+**Test A, ohne Claude:**
+1. GD starten und ein Level im Editor öffnen.
+2. In PowerShell im Ordner `mcp-server`:
+   ```powershell
+   node test-verbindung.js
+   ```
+   Erwartet: `Ping: { pong: true, inEditor: true, ... }` und die Level-Info.
+3. Mit `node test-verbindung.js --block` wird ein Block ganz links auf den Boden gesetzt.
+   Im Editor mit **Strg+Z** kannst du ihn wieder entfernen.
+
+**Test B, mit Claude:**
+Schreib in der Claude-Desktop-App:
+> Prüfe mit gd_ping, ob Geometry Dash verbunden ist, und sag mir dann Name und Objektanzahl meines Levels.
+
+Danach:
+> Setz eine Reihe aus 5 Blöcken ab x=300 auf den Boden und einen Stachel dahinter.
+
+Und dann im Editor zweimal **Strg+Z** drücken.
+
+## Rückgängig machen (Strg+Z)
+
+| Aktion | Strg+Z |
+|---|---|
+| Objekte hinzufügen | 1x |
+| Objekte löschen | 1x |
+| Objekte ändern/verschieben | 2x (alte werden gelöscht, neue erstellt) |
+| Farbkanal setzen | geht nicht. GD selbst kann das auch nicht rückgängig machen; Claude bekommt die alten Werte zurück |
+
+## Häufige Probleme
+
+- **"Keine Verbindung zu ws://127.0.0.1:1414"**: GD läuft nicht, die Mod ist nicht installiert oder ein anderes
+  Programm belegt den Port. Den Port kannst du in den Mod-Einstellungen ändern (danach GD neu starten
+  und in `claude_desktop_config.json` unter `"env": { "GD_BRIDGE_PORT": "1415" }` eintragen).
+- **"Bitte zuerst ein Level im Level-Editor öffnen"**: Du musst im Editor sein, nicht im Menü und nicht im Playtest.
+- **In Claude tauchen keine gd_-Werkzeuge auf**: Pfad in der Config prüfen (doppelte `\\`) und Claude Desktop ganz beenden.
+  Log-Dateien findest du unter `%APPDATA%\Claude\logs\mcp-server-geometry-dash.log`.
+- **Build auf GitHub rot**: Den Fehlertext aus dem Actions-Log kopieren und mir schicken.
+
+## Sicherheit
+
+- Der Server lauscht nur auf `127.0.0.1`. Andere Geräte im Netzwerk erreichen ihn nicht.
+- Verbindungen mit einem Browser-"Origin" werden abgelehnt, damit keine Webseite deinen Editor steuern kann.
+
+cmake_minimum_required(VERSION 3.21)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS" OR IOS)
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+else()
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
+endif()
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+
+# asio/websocketpp vertragen sich nicht gut mit vorkompilierten Geode-Headern
+set(GEODE_DISABLE_PRECOMPILED_HEADERS ON)
+
+project(ClaudeBridge VERSION 1.0.0)
+
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
+add_library(${PROJECT_NAME} SHARED ${SOURCES})
+
+if (NOT DEFINED ENV{GEODE_SDK})
+    message(FATAL_ERROR "Unable to find Geode SDK! Please define GEODE_SDK environment variable to point to Geode")
+else()
+    message(STATUS "Found Geode: $ENV{GEODE_SDK}")
+endif()
+
+add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
+setup_geode_mod(${PROJECT_NAME})
+
+# WebSocket-Bibliothek (nur Header) + asio, genau wie WSLiveEditor
+CPMAddPackage(
+    NAME websocketpp
+    GITHUB_REPOSITORY zaphoyd/websocketpp
+    GIT_TAG 4dfe1be
+    DOWNLOAD_ONLY YES
+)
+CPMAddPackage(
+    NAME asio
+    GITHUB_REPOSITORY chriskohlhoff/asio
+    GIT_TAG asio-1-24-0
+    DOWNLOAD_ONLY YES
+)
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${websocketpp_SOURCE_DIR}
+    ${asio_SOURCE_DIR}/asio/include
+)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    ASIO_STANDALONE
+    _WEBSOCKETPP_CPP11_STL_
+    _WEBSOCKETPP_CPP11_FUNCTIONAL_
+)
+
+{
+  "geode": "5.0.0",
+  "gd": {
+    "win": "2.2081"
+  },
+  "id": "local.claude-bridge",
+  "name": "Claude Bridge",
+  "version": "v1.0.0",
+  "developer": "Local",
+  "description": "Lokaler WebSocket-Server (nur 127.0.0.1), damit Claude im Level-Editor arbeiten kann.",
+  "settings": {
+    "port": {
+      "type": "int",
+      "default": 1414,
+      "min": 1024,
+      "max": 65535,
+      "name": "WebSocket-Port",
+      "description": "Port fuer den lokalen Server. Nach einer Aenderung Geometry Dash neu starten."
+    }
+  }
+}
