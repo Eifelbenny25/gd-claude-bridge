@@ -1,0 +1,16 @@
+{
+  "name": "gd-claude-bridge-mcp",
+  "version": "1.0.0",
+  "description": "MCP-Server, der die Claude-Desktop-App mit der Geode-Mod 'Claude Bridge' verbindet",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test-verbindung": "node test-verbindung.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  }
+}

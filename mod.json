@@ -1,0 +1,21 @@
+{
+  "geode": "5.0.0",
+  "gd": {
+    "win": "2.2081"
+  },
+  "id": "local.claude-bridge",
+  "name": "Claude Bridge",
+  "version": "v1.0.0",
+  "developer": "Local",
+  "description": "Lokaler WebSocket-Server (nur 127.0.0.1), damit Claude im Level-Editor arbeiten kann.",
+  "settings": {
+    "port": {
+      "type": "int",
+      "default": 1414,
+      "min": 1024,
+      "max": 65535,
+      "name": "WebSocket-Port",
+      "description": "Port fuer den lokalen Server. Nach einer Aenderung Geometry Dash neu starten."
+    }
+  }
+}
