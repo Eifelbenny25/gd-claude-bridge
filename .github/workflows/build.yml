@@ -17,7 +17,8 @@ jobs:
         id: build
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: latest
+          # Feste Geode-Version fuer GD 2.2081 ("latest" nimmt sonst die 6.0-Alpha)
+          sdk: v5.11.2
 
       - name: Upload .geode file
         uses: actions/upload-artifact@v4
