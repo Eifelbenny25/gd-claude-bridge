@@ -855,52 +855,80 @@ State step(World const& w, State s, bool action) {
 // ---------------------------------------------------------------------------
 // Suche (Breitensuche ueber alle Ticks, Zustaende werden zusammengelegt)
 // ---------------------------------------------------------------------------
-struct Node {
-    State s;
-    int parent;
+uint64_t hashKey(Key const& k) {
+    uint64_t h = static_cast<uint64_t>(KeyHash{}(k));
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    return h;
+}
+
+// Gespeichert wird pro Tick nur ein kleiner Fingerabdruck pro Zustand (nicht der
+// ganze Zustand), damit auch lange Level in den Speicher passen.
+struct LNode {
+    uint64_t key;
+    int32_t parent;
+    uint8_t terminal;
 };
 struct Edge {
     int child, parent;
 };
 
 struct Search {
-    std::vector<std::vector<Node>> layers;
+    std::vector<std::vector<LNode>> layers;
     std::vector<std::vector<Edge>> extras;
-    std::vector<std::vector<std::pair<Key, int>>> keys;
+    std::vector<std::vector<uint32_t>> order;              // pro Tick nach key sortierte Indizes
     std::vector<std::vector<char>> good;
-    std::vector<std::vector<Key>> goodCoarse;              // sortiert, pro Tick
+    std::vector<std::vector<uint64_t>> goodCoarse;         // sortiert, pro Tick
     float reachedX = 0;
     float deathX = -1e9f, deathY = 0;
     int furthestKiller = -1;
-    bool pruned = false;
+    bool pruned = false, anyStopped = false;
+    int capUsed = 0;
     long long explored = 0;
 
+    int ticks() const { return static_cast<int>(layers.size()); }
+
+    int find(int tick, uint64_t h) const {
+        auto const& L = layers[tick];
+        auto const& o = order[tick];
+        auto it = std::lower_bound(o.begin(), o.end(), h,
+                                   [&](uint32_t i, uint64_t v) { return L[i].key < v; });
+        if (it != o.end() && L[*it].key == h) return static_cast<int>(*it);
+        return -1;
+    }
+
     bool isGood(int tick, State const& s) const {
-        if (tick < 0 || tick >= static_cast<int>(keys.size())) return false;
+        if (tick < 0 || tick >= ticks()) return false;
         if (s.dead) return false;
         Key k = keyOf(s);
-        auto const& v = keys[tick];
-        auto it = std::lower_bound(v.begin(), v.end(), k, [](auto const& a, Key const& b) {
-            return a.first < b;
-        });
-        if (it != v.end() && it->first == k) return good[tick][it->second] != 0;
-        // Genau dieser Zustand fehlt (Rundung/Ausduennen): grob nachschauen
-        Key c = coarseOf(k);
+        int j = find(tick, hashKey(k));
+        if (j >= 0) return good[tick][j] != 0;
+        if (tick >= static_cast<int>(goodCoarse.size())) return false;
+        uint64_t c = hashKey(coarseOf(k));
         auto const& g = goodCoarse[tick];
         return std::binary_search(g.begin(), g.end(), c);
     }
 };
 
 void runSearch(World const& w, State const& start, Settings const& st, Search& S, float stopAtX) {
-    S.layers.push_back({Node{start, -1}});
+    // Speicher-Budget: etwa 20 Mio. gespeicherte Zustaende insgesamt (~400 MB)
+    float dist = std::max(300.f, w.endX - start.x);
+    int estTicks = static_cast<int>(dist / 251.f * TPS) + 240;
+    constexpr long long BUDGET = 20'000'000;
+    int cap = static_cast<int>(std::clamp<long long>(BUDGET / estTicks, 600, st.frontierCap));
+    S.capUsed = cap;
+
+    std::vector<State> cur{start}, nextStates;
+    S.layers.push_back({LNode{hashKey(keyOf(start)), -1, 0}});
     S.extras.push_back({});
     int maxTicks = st.maxSeconds * TPS;
 
     for (int t = 0; t < maxTicks; ++t) {
-        auto const& cur = S.layers[t];
-        std::vector<Node> next;
+        std::vector<LNode> next;
         std::vector<Edge> ex;
-        std::unordered_map<Key, int, KeyHash> map;
+        nextStates.clear();
+        std::unordered_map<uint64_t, int> map;
         map.reserve(cur.size() * 2 + 4);
         bool anyAlive = false;
 
@@ -916,11 +944,13 @@ void runSearch(World const& w, State const& start, Settings const& st, Search& S
             }
             State cc = c;
             if (stopAtX > 0 && cc.x >= stopAtX) cc.finished = true;
+            if (cc.stopped) S.anyStopped = true;
             S.reachedX = std::max(S.reachedX, cc.x);
-            Key k = keyOf(cc);
-            auto [it, inserted] = map.try_emplace(k, static_cast<int>(next.size()));
+            uint64_t h = hashKey(keyOf(cc));
+            auto [it, inserted] = map.try_emplace(h, static_cast<int>(next.size()));
             if (inserted) {
-                next.push_back(Node{cc, parent});
+                next.push_back(LNode{h, parent, static_cast<uint8_t>(cc.terminal() ? 1 : 0)});
+                nextStates.push_back(cc);
                 if (!cc.terminal()) anyAlive = true;
             }
             else {
@@ -929,33 +959,35 @@ void runSearch(World const& w, State const& start, Settings const& st, Search& S
         };
 
         for (int i = 0; i < static_cast<int>(cur.size()); ++i) {
-            State const& s = cur[i].s;
+            State const& s = cur[i];
             if (s.terminal()) continue;
             add(step(w, s, false), i);
             add(step(w, s, true), i);
         }
 
-        if (static_cast<int>(next.size()) > st.frontierCap) {
+        if (static_cast<int>(next.size()) > cap) {
             S.pruned = true;
             std::vector<int> idx(next.size());
             for (size_t i = 0; i < idx.size(); ++i) idx[i] = static_cast<int>(i);
             std::sort(idx.begin(), idx.end(), [&](int a, int b) {
-                auto const& A = next[a].s;
-                auto const& B = next[b].s;
+                auto const& A = nextStates[a];
+                auto const& B = nextStates[b];
                 if (A.terminal() != B.terminal()) return A.terminal();
                 if (A.y != B.y) return A.y < B.y;
                 return A.yv < B.yv;
             });
             std::vector<char> keep(next.size(), 0);
-            double stride = static_cast<double>(idx.size()) / st.frontierCap;
-            for (int j = 0; j < st.frontierCap; ++j) keep[idx[static_cast<size_t>(j * stride)]] = 1;
-            for (auto i : idx) if (next[i].s.terminal()) keep[i] = 1;
+            double stride = static_cast<double>(idx.size()) / cap;
+            for (int j = 0; j < cap; ++j) keep[idx[static_cast<size_t>(j * stride)]] = 1;
+            for (auto i : idx) if (nextStates[i].terminal()) keep[i] = 1;
             std::vector<int> remap(next.size(), -1);
-            std::vector<Node> kept;
+            std::vector<LNode> kept;
+            std::vector<State> keptS;
             for (size_t i = 0; i < next.size(); ++i) {
                 if (keep[i]) {
                     remap[i] = static_cast<int>(kept.size());
                     kept.push_back(next[i]);
+                    keptS.push_back(nextStates[i]);
                 }
             }
             std::vector<Edge> ex2;
@@ -963,44 +995,71 @@ void runSearch(World const& w, State const& start, Settings const& st, Search& S
                 if (remap[e.child] >= 0) ex2.push_back(Edge{remap[e.child], e.parent});
             }
             next.swap(kept);
+            nextStates.swap(keptS);
             ex.swap(ex2);
-            anyAlive = std::any_of(next.begin(), next.end(), [](Node const& n) { return !n.s.terminal(); });
+            anyAlive = std::any_of(nextStates.begin(), nextStates.end(),
+                                   [](State const& n) { return !n.terminal(); });
         }
 
         if (next.empty()) break;
+        next.shrink_to_fit();
+        ex.shrink_to_fit();
         S.layers.push_back(std::move(next));
         S.extras.push_back(std::move(ex));
+        cur.swap(nextStates);
         if (!anyAlive) break;
     }
 
-    S.keys.resize(S.layers.size());
-    S.good.resize(S.layers.size());
-    for (size_t t = 0; t < S.layers.size(); ++t) {
-        auto& kv = S.keys[t];
-        kv.reserve(S.layers[t].size());
-        for (int i = 0; i < static_cast<int>(S.layers[t].size()); ++i) {
-            kv.emplace_back(keyOf(S.layers[t][i].s), i);
-        }
-        std::sort(kv.begin(), kv.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
-        S.good[t].assign(S.layers[t].size(), 0);
-        for (size_t i = 0; i < S.layers[t].size(); ++i) {
-            if (S.layers[t][i].s.terminal()) S.good[t][i] = 1;
-        }
+    int T = S.ticks();
+    S.order.resize(T);
+    S.good.resize(T);
+    for (int t = 0; t < T; ++t) {
+        auto const& L = S.layers[t];
+        auto& o = S.order[t];
+        o.resize(L.size());
+        for (size_t i = 0; i < L.size(); ++i) o[i] = static_cast<uint32_t>(i);
+        std::sort(o.begin(), o.end(), [&](uint32_t a, uint32_t b) { return L[a].key < L[b].key; });
+        S.good[t].assign(L.size(), 0);
+        for (size_t i = 0; i < L.size(); ++i) if (L[i].terminal) S.good[t][i] = 1;
     }
-    for (int t = static_cast<int>(S.layers.size()) - 1; t > 0; --t) {
+    for (int t = T - 1; t > 0; --t) {
         for (size_t i = 0; i < S.layers[t].size(); ++i) {
             if (S.good[t][i]) S.good[t - 1][S.layers[t][i].parent] = 1;
         }
         for (auto const& e : S.extras[t]) {
             if (S.good[t][e.child]) S.good[t - 1][e.parent] = 1;
         }
+        std::vector<Edge>().swap(S.extras[t]); // wird nicht mehr gebraucht
     }
-    S.goodCoarse.resize(S.layers.size());
-    for (size_t t = 0; t < S.layers.size(); ++t) {
-        auto& g = S.goodCoarse[t];
-        for (size_t i = 0; i < S.layers[t].size(); ++i) {
-            if (S.good[t][i]) g.push_back(coarseOf(keyOf(S.layers[t][i].s)));
+}
+
+// Grobe Fingerabdruecke der "guten" Zustaende pro Tick (fuer das tolerante
+// Nachschlagen). Die Zustaende selbst sind nicht gespeichert, darum werden sie
+// vom Start aus entlang der guten Knoten neu berechnet.
+void buildCoarse(World const& w, Search& S, State const& start) {
+    int T = S.ticks();
+    S.goodCoarse.assign(T, {});
+    if (T == 0 || !S.good[0][0]) return;
+    std::vector<State> cur{start};
+    S.goodCoarse[0].push_back(hashKey(coarseOf(keyOf(start))));
+    for (int t = 0; t + 1 < T && !cur.empty(); ++t) {
+        std::vector<char> seen(S.layers[t + 1].size(), 0);
+        std::vector<State> next;
+        for (auto const& s : cur) {
+            if (s.terminal()) continue;
+            for (int a = 0; a < 2; ++a) {
+                State c = step(w, s, a == 1);
+                if (c.dead) continue;
+                int j = S.find(t + 1, hashKey(keyOf(c)));
+                if (j < 0 || !S.good[t + 1][j] || seen[j]) continue;
+                seen[j] = 1;
+                next.push_back(c);
+                S.goodCoarse[t + 1].push_back(hashKey(coarseOf(keyOf(c))));
+            }
         }
+        cur.swap(next);
+    }
+    for (auto& g : S.goodCoarse) {
         std::sort(g.begin(), g.end());
         g.erase(std::unique(g.begin(), g.end()), g.end());
     }
@@ -1048,7 +1107,7 @@ std::string actionName(World const& w, State const& s) {
 void extractClicks(World const& w, Search const& S, State start, Result& R, std::vector<char>& usedObjs) {
     State cur = start;
     int t = 0;
-    int limit = static_cast<int>(S.layers.size()) + 4;
+    int limit = S.ticks() + 4;
     auto markUsed = [&](State const& before, State const& after) {
         if (after.usedOrb != before.usedOrb && after.usedOrb >= 0) usedObjs[after.usedOrb] = 1;
         if (after.usedPad != before.usedPad && after.usedPad >= 0) usedObjs[after.usedPad] = 1;
@@ -1146,9 +1205,10 @@ Result analyzeOnce(std::vector<LevelObj> const& objects, Start const& start,
 
     Search S;
     runSearch(w, s0, st, S, stopAtX);
+    if (stopAtX <= 0) buildCoarse(w, S, s0);
     R.statesExplored = S.explored;
     R.reachedX = S.reachedX;
-    R.possible = !S.good.empty() && S.good[0][0];
+    R.possible = S.ticks() > 0 && S.good[0][0];
     if (S.pruned) {
         R.warnings.push_back("Sehr viele Moeglichkeiten - Suche wurde ausgeduennt. "
                              "Ein 'unmoeglich' kann hier falsch sein.");
@@ -1170,11 +1230,7 @@ Result analyzeOnce(std::vector<LevelObj> const& objects, Start const& start,
     std::vector<char> used(objects.size(), 0);
     extractClicks(w, S, s0, R, used);
 
-    for (auto const& layer : S.layers) {
-        for (auto const& n : layer) {
-            if (n.s.stopped) R.stoppedAtUnsupported = true;
-        }
-    }
+    R.stoppedAtUnsupported = S.anyStopped;
 
     float lastX = R.path.empty() ? 0.f : R.path.back().x;
     for (size_t i = 0; i < objects.size(); ++i) {
