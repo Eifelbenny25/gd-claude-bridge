@@ -2,10 +2,15 @@
 
 // Bot-Simulator fuer den Level-Editor.
 // Reines C++ (keine Geode-Abhaengigkeit), damit er auch ausserhalb von GD
-// getestet werden kann (siehe tests/sim_test.cpp).
+// kompiliert/getestet werden kann (siehe tests/sim_test.cpp).
+//
+// Physik: GD 2.2081, klassischer Modus, nach den dekompilierten Funktionen
+// (PlayerObject::update/updateJump/ringJump/propellPlayer, collidedWithObjectInternal)
+// wie sie in github.com/alpbayrak031-hash/GD-Remake (gd/constants.py, gd/player.py,
+// gd/sim.py) mit Quellen dokumentiert sind. Alle 8 Spielmodi + Mini.
 //
 // Koordinaten: GD-intern wie im Editor (Boden bei y = 90, Spieler auf dem
-// Boden hat die Mitte bei y = 105). 240 Physik-Ticks pro Sekunde wie GD 2.2.
+// Boden hat die Mitte bei y = 105). 240 Physik-Ticks pro Sekunde.
 
 #include <cstdint>
 #include <string>
@@ -27,15 +32,22 @@ enum class Kind : uint8_t {
     // Portale
     GravityNormal, GravityFlip, GravityToggle,
     Speed05, Speed1, Speed2, Speed3, Speed4,
-    ModeCube, ModeOther,   // anderer Spielmodus = wird (noch) nicht simuliert
+    ModeCube, ModeShip, ModeBall, ModeUfo, ModeWave, ModeRobot, ModeSpider, ModeSwing,
     SizeMini, SizeNormal,
-    Unsupported,           // z. B. Teleport, Spider-Orb: Warnung
+    Stop,                  // Dual / Teleport: Analyse endet hier
+    Unsupported,           // wird ignoriert (Warnung), z. B. Spider-Orb
 };
+
+enum class Mode : uint8_t { Cube, Ship, Ball, Ufo, Wave, Robot, Spider, Swing };
 
 struct Rect {
     float x0, y0, x1, y1; // links, unten, rechts, oben
     bool overlaps(Rect const& o) const {
         return x0 < o.x1 && o.x0 < x1 && y0 < o.y1 && o.y0 < y1;
+    }
+    // cocos2d intersectsRect: Kanten, die sich nur beruehren, zaehlen
+    bool touches(Rect const& o) const {
+        return !(x1 < o.x0 || o.x1 < x0 || y1 < o.y0 || o.y1 < y0);
     }
 };
 
@@ -44,8 +56,10 @@ struct LevelObj {
     Rect rect;
     int uid = 0;
     int objectId = 0;
-    float x = 0, y = 0;      // Mitte (fuer Meldungen)
+    float x = 0, y = 0;      // Mitte (fuer Meldungen, Portal-Hoehe)
     float rotation = 0;      // fuer Dash-Orbs
+    bool flipX = false;      // fuer Dash-Orbs
+    bool upside = false;     // Pad/Orb an der Decke (180 Grad oder gespiegelt)
     float sy0 = 0, sy1 = 0;  // Schraege: Oberflaechen-y bei rect.x0 und rect.x1
 };
 
@@ -53,28 +67,17 @@ struct Start {
     float x = 0, y = 105;
     int speed = 1;           // 0 = 0.5x, 1 = 1x, 2 = 2x, 3 = 3x, 4 = 4x
     bool gravityFlipped = false;
+    Mode mode = Mode::Cube;
+    bool mini = false;
 };
 
-// Werte in Einheiten/Sekunde bzw. E/s^2. Gemessen: Gravitation, rotes Pad,
-// gelber Orb (siehe Skill-Notiz physik-messwerte). Der Rest ist ueber das
-// Verhaeltnis der GD-Internwerte hochgerechnet (Faktor ~53.7) = Schaetzung.
 struct Physics {
-    float gravity = 2800.f;
-    float maxFall = 810.f;
-    float jump = 600.f;
-    float padYellow = 859.f, padPink = 558.f, padRed = 1076.f, padBlue = 300.f;
-    float orbYellow = 601.f, orbPink = 430.f, orbRed = 827.f, orbBlue = 300.f,
-          orbBlack = 810.f;
-    float speeds[5] = {251.16f, 311.58f, 387.42f, 468.0f, 576.0f};
-    float half = 15.f;        // halbe Spielergroesse (30x30)
-    float innerHalf = 4.5f;   // innere Hitbox (Seitenkollision mit Bloecken)
-    float landTolerance = 6.f;
-    float floorY = 90.f;
+    float floorY = 90.f;     // Boden in GD-internen Koordinaten
 };
 
 struct Settings {
     int maxSeconds = 600;
-    int frontierCap = 6000;
+    int frontierCap = 4000;
     bool suggestNerfs = true;
 };
 
@@ -85,8 +88,8 @@ struct Click {
     int windowStart = 0;     // erster funktionierender Tick
     int windowEnd = 0;       // letzter funktionierender Tick
     float x = 0, y = 0;      // Spielerposition beim Klick
-    bool release = false;    // Loslassen (Dash-Orb) statt Druecken
-    std::string what;        // "Sprung", "gelber Orb", ...
+    bool release = false;    // Loslassen statt Druecken
+    std::string what;        // "Sprung", "gelber Orb", "Loslassen" ...
     int windowTicks() const { return windowEnd - windowStart + 1; }
 };
 
@@ -101,7 +104,7 @@ struct Nerf {
 
 struct Result {
     bool possible = false;
-    bool stoppedAtUnsupported = false; // Ende der Analyse an einem Modus-Portal
+    bool stoppedAtUnsupported = false; // Ende der Analyse an Dual/Teleport
     float endX = 0;
     float reachedX = 0;                // am weitesten gekommen
     float deathX = 0, deathY = 0;
@@ -122,5 +125,6 @@ Result analyze(std::vector<LevelObj> const& objects, Start const& start,
 std::string summary(Result const& r);
 std::string clickLabel(Click const& c);
 char const* kindName(Kind k);
+char const* modeName(Mode m);
 
 } // namespace bot

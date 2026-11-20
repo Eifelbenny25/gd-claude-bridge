@@ -49,21 +49,23 @@ std::optional<Kind> classify(GameObject* obj) {
         case T::InverseGravityPortal: return Kind::GravityFlip;
         case T::GravityTogglePortal: return Kind::GravityToggle;
         case T::CubePortal: return Kind::ModeCube;
-        case T::ShipPortal:
-        case T::BallPortal:
-        case T::UfoPortal:
-        case T::WavePortal:
-        case T::RobotPortal:
-        case T::SpiderPortal:
-        case T::SwingPortal:
-            return Kind::ModeOther;
+        case T::ShipPortal: return Kind::ModeShip;
+        case T::BallPortal: return Kind::ModeBall;
+        case T::UfoPortal: return Kind::ModeUfo;
+        case T::WavePortal: return Kind::ModeWave;
+        case T::RobotPortal: return Kind::ModeRobot;
+        case T::SpiderPortal: return Kind::ModeSpider;
+        case T::SwingPortal: return Kind::ModeSwing;
         case T::MiniSizePortal: return Kind::SizeMini;
         case T::RegularSizePortal: return Kind::SizeNormal;
         case T::InverseMirrorPortal:
         case T::NormalMirrorPortal:
+            return std::nullopt; // Spiegel-Portale aendern nur die Ansicht
         case T::DualPortal:
-        case T::SoloPortal:
         case T::TeleportPortal:
+            return Kind::Stop;
+        case T::SoloPortal:
+            return std::nullopt;
         case T::CustomRing:
         case T::SpiderOrb:
         case T::SpiderPad:
@@ -112,6 +114,11 @@ std::vector<LevelObj> collectLevel(LevelEditorLayer* editor, Start& start,
             o.x = obj->getPositionX();
             o.y = obj->getPositionY();
             o.rotation = obj->getRotation();
+            o.flipX = obj->isFlipX();
+            {
+                float rr = std::fmod(std::fmod(obj->getRotation(), 360.f) + 360.f, 360.f);
+                o.upside = (std::abs(rr - 180.f) < 1.f) != obj->isFlipY();
+            }
             if (o.kind == Kind::Slope) {
                 // Im Editor setzt GD m_slopeDirection erst beim Playtest. Darum
                 // selbst bestimmen: ungespiegelt/0 Grad = steigt nach rechts, Boden oben.
@@ -146,10 +153,9 @@ std::vector<LevelObj> collectLevel(LevelEditorLayer* editor, Start& start,
             case Speed::Fastest: start.speed = 4; break;
         }
         start.gravityFlipped = ls->m_isFlipped;
-        if (ls->m_startMode != 0) {
-            warnings.push_back("Das Level startet nicht als Cube. Bisher wird nur der Cube simuliert.");
-        }
-        if (ls->m_startMini) warnings.push_back("Mini-Start wird noch nicht simuliert.");
+        if (ls->m_startMode >= 0 && ls->m_startMode <= 7) start.mode = static_cast<Mode>(ls->m_startMode);
+        start.mini = ls->m_startMini;
+        if (ls->m_startDual) warnings.push_back("Dual-Start wird nicht simuliert (nur ein Spieler).");
     }
     if (start.gravityFlipped) start.y = 105.f;
     return out;
