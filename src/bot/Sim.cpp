@@ -105,9 +105,11 @@ struct KeyHash {
 Key keyOf(State const& s) {
     Key k;
     std::memset(&k, 0, sizeof(k));
+    bool fly = isFlyingMode(s.mode);
     k.xq = static_cast<int32_t>(std::lround(s.x * 4.f));
-    k.yq = static_cast<int32_t>(std::lround(s.y * 2.f));
-    k.vq = static_cast<int32_t>(std::lround(s.yv * 20.0));
+    // Im Flug gibt es viel mehr Varianten: groeber zusammenlegen (1 E / 0.2 v)
+    k.yq = static_cast<int32_t>(std::lround(s.y * (fly ? 1.f : 2.f)));
+    k.vq = static_cast<int32_t>(std::lround(s.yv * (fly ? 5.0 : 20.0)));
     k.rq = static_cast<int16_t>(std::lround(s.robotCharge * 10.f));
     k.fq = static_cast<int16_t>(std::lround(s.floorB));
     k.cq = static_cast<int16_t>(std::lround(s.ceilB));
@@ -117,8 +119,12 @@ Key keyOf(State const& s) {
     k.slope = s.slope;
     uint32_t b = 0;
     auto put = [&](bool v) { b = (b << 1) | (v ? 1u : 0u); };
-    put(s.mini); put(s.flipped); put(s.holding); put(s.jumpUnused); put(s.holdDelayed);
-    put(s.canRing); put(s.canJump); put(s.onGround); put(s.isJumping); put(s.uncapped);
+    // Ship/Wave: Klick-Merker spielen nur fuer Orbs eine Rolle -> weglassen
+    bool simpleFly = s.mode == Mode::Ship || s.mode == Mode::Wave;
+    put(s.mini); put(s.flipped); put(s.holding);
+    put(simpleFly ? false : s.jumpUnused); put(simpleFly ? false : s.holdDelayed);
+    put(simpleFly ? false : s.canRing); put(simpleFly ? false : s.canJump);
+    put(simpleFly ? false : s.onGround); put(simpleFly ? false : s.isJumping); put(s.uncapped);
     put(s.robotInvalid); put(s.dashing); put(s.onSlope); put(s.finished); put(s.stopped);
     put(s.sinceFlip < FLIP_GRACE_TICKS);
     b = (b << 3) | static_cast<uint32_t>(s.speed);
@@ -1152,7 +1158,12 @@ void extractClicks(World const& w, Search const& S, State start, Result& R, std:
             break;
         }
 
+        // Das groesste Fenster nehmen (bei Gleichstand das spaetere): so faehrt
+        // der Weg nicht staendig am Limit und die folgenden Fenster bleiben fair.
         Win wsel = wins.back();
+        for (auto const& wn : wins) {
+            if (wn.b - wn.a > wsel.b - wsel.a) wsel = wn;
+        }
         int c = (wsel.a + wsel.b) / 2;
         State const& before = idle[c - t];
         Click k;
