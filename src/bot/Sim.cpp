@@ -127,6 +127,16 @@ Key keyOf(State const& s) {
     return k;
 }
 
+// Grobe Version des Schluessels (2 Einheiten / 0.4 Geschwindigkeit) fuer das
+// Nachschlagen, wenn der genaue Zustand beim Ausduennen weggefallen ist.
+Key coarseOf(Key k) {
+    auto fdiv = [](int32_t a, int32_t b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
+    k.yq = fdiv(k.yq, 4);
+    k.vq = fdiv(k.vq, 8);
+    k.xq = fdiv(k.xq, 4);
+    return k;
+}
+
 // ---------------------------------------------------------------------------
 // Welt: Objekte + schnelle Suche nach x
 // ---------------------------------------------------------------------------
@@ -858,6 +868,7 @@ struct Search {
     std::vector<std::vector<Edge>> extras;
     std::vector<std::vector<std::pair<Key, int>>> keys;
     std::vector<std::vector<char>> good;
+    std::vector<std::vector<Key>> goodCoarse;              // sortiert, pro Tick
     float reachedX = 0;
     float deathX = -1e9f, deathY = 0;
     int furthestKiller = -1;
@@ -866,13 +877,17 @@ struct Search {
 
     bool isGood(int tick, State const& s) const {
         if (tick < 0 || tick >= static_cast<int>(keys.size())) return false;
+        if (s.dead) return false;
         Key k = keyOf(s);
         auto const& v = keys[tick];
         auto it = std::lower_bound(v.begin(), v.end(), k, [](auto const& a, Key const& b) {
             return a.first < b;
         });
-        if (it == v.end() || !(it->first == k)) return false;
-        return good[tick][it->second] != 0;
+        if (it != v.end() && it->first == k) return good[tick][it->second] != 0;
+        // Genau dieser Zustand fehlt (Rundung/Ausduennen): grob nachschauen
+        Key c = coarseOf(k);
+        auto const& g = goodCoarse[tick];
+        return std::binary_search(g.begin(), g.end(), c);
     }
 };
 
@@ -980,6 +995,15 @@ void runSearch(World const& w, State const& start, Settings const& st, Search& S
             if (S.good[t][e.child]) S.good[t - 1][e.parent] = 1;
         }
     }
+    S.goodCoarse.resize(S.layers.size());
+    for (size_t t = 0; t < S.layers.size(); ++t) {
+        auto& g = S.goodCoarse[t];
+        for (size_t i = 0; i < S.layers[t].size(); ++i) {
+            if (S.good[t][i]) g.push_back(coarseOf(keyOf(S.layers[t][i].s)));
+        }
+        std::sort(g.begin(), g.end());
+        g.erase(std::unique(g.begin(), g.end()), g.end());
+    }
 }
 
 std::string fmt(char const* f, double a) {
@@ -1001,6 +1025,9 @@ std::string actionName(World const& w, State const& s) {
     if (s.holding) return s.dashing ? "Dash loslassen" : "Loslassen";
     int o = orbForLabel(w, s);
     if (o >= 0) return kindName(w.objs[o].kind);
+    bool groundMode = s.mode == Mode::Cube || s.mode == Mode::Robot || s.mode == Mode::Ball ||
+                      s.mode == Mode::Spider;
+    if (groundMode && !s.canJump) return "Druecken (vorhalten fuer naechsten Orb/Landung)";
     switch (s.mode) {
         case Mode::Cube: return "Sprung";
         case Mode::Ship: return "Halten (Ship hoch)";
@@ -1302,7 +1329,7 @@ Result analyze(std::vector<LevelObj> const& objects, Start const& start, Physics
 
     Settings fast = st;
     fast.suggestNerfs = false;
-    fast.frontierCap = std::min(st.frontierCap, 1500);
+    fast.frontierCap = std::min(st.frontierCap, 6000);
     float stopAt = R.deathX + 450.f;
 
     Nerf bestPartial;

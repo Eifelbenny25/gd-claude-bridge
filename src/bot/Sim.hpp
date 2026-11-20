@@ -77,7 +77,7 @@ struct Physics {
 
 struct Settings {
     int maxSeconds = 600;
-    int frontierCap = 4000;
+    int frontierCap = 25000;
     bool suggestNerfs = true;
 };
 
