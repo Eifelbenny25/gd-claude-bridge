@@ -2,6 +2,7 @@
 
 #include <Geode/modify/EditorUI.hpp>
 
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -28,7 +29,7 @@ std::optional<Kind> classify(GameObject* obj) {
             return Kind::Solid;
         case T::Slope:
             if (obj->m_slopeIsHazard) return Kind::Hazard;
-            return obj->slopeFloorTop() ? Kind::Slope : Kind::Solid;
+            return Kind::Slope; // Richtung wird in collectLevel bestimmt
         case T::Hazard:
         case T::AnimatedHazard:
             return Kind::Hazard;
@@ -100,7 +101,6 @@ std::vector<LevelObj> collectLevel(LevelEditorLayer* editor, Start& start,
             if (!kind) continue;
             if (obj->m_isNoTouch) continue;
             if (*kind == Kind::Solid && obj->m_isPassable) continue;
-            if (obj->m_objectType == GameObjectType::Slope && *kind == Kind::Solid) slope = true;
 
             CCRect r = obj->getObjectRect();
             if (r.size.width <= 0.f || r.size.height <= 0.f) continue;
@@ -113,20 +113,27 @@ std::vector<LevelObj> collectLevel(LevelEditorLayer* editor, Start& start,
             o.y = obj->getPositionY();
             o.rotation = obj->getRotation();
             if (o.kind == Kind::Slope) {
-                o.sy0 = static_cast<float>(obj->slopeYPos(o.rect.x0));
-                o.sy1 = static_cast<float>(obj->slopeYPos(o.rect.x1));
-                bool sane = o.sy0 >= o.rect.y0 - 1 && o.sy0 <= o.rect.y1 + 1 &&
-                            o.sy1 >= o.rect.y0 - 1 && o.sy1 <= o.rect.y1 + 1 &&
-                            std::abs(o.sy1 - o.sy0) > 1.f;
-                if (!sane) {
-                    o.sy0 = obj->m_slopeUphill ? o.rect.y0 : o.rect.y1;
-                    o.sy1 = obj->m_slopeUphill ? o.rect.y1 : o.rect.y0;
+                // Im Editor setzt GD m_slopeDirection erst beim Playtest. Darum
+                // selbst bestimmen: ungespiegelt/0 Grad = steigt nach rechts, Boden oben.
+                float rot = std::fmod(std::fmod(obj->getRotation(), 360.f) + 360.f, 360.f);
+                bool fx = obj->isFlipX(), fy = obj->isFlipY();
+                bool ok = true;
+                if (std::abs(rot - 180.f) < 1.f) { fx = !fx; fy = !fy; }
+                else if (rot > 1.f && rot < 359.f) ok = false; // 90/270 Grad: als Block
+                if (!ok || fy) {
+                    o.kind = Kind::Solid;
+                    slope = true;
+                }
+                else {
+                    bool uphillRight = !fx;
+                    o.sy0 = uphillRight ? o.rect.y0 : o.rect.y1;
+                    o.sy1 = uphillRight ? o.rect.y1 : o.rect.y0;
                 }
             }
             out.push_back(o);
         }
     }
-    if (slope) warnings.push_back("Schraegen mit Boden unten (Decke) werden wie Bloecke behandelt.");
+    if (slope) warnings.push_back("Gedrehte Schraegen oder Decken-Schraegen werden wie Bloecke behandelt.");
     if (triggers) warnings.push_back("Move-/Toggle-Trigger werden nicht simuliert (Objekte bleiben an ihrer Editor-Position).");
 
     start = Start{};
