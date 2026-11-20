@@ -184,6 +184,21 @@ server.registerTool(
 );
 
 server.registerTool(
+  "gd_bot_analyze",
+  {
+    description: "Laesst den Bot (eigener Cube-Simulator, 240 Ticks/s) das Level ab dem Start spielen. Liefert: moeglich/unmoeglich, Klicks mit Zeitfenster in Ticks (4 Ticks = 1 Frame @60), Todesstelle + Nerf-Vorschlaege, nicht gebrauchte Orbs/Pads (Skips). Physik ist geschaetzt (+-1 Tick), nur Cube.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await callGD("bot_analyze", {}, 120000));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
   "gd_set_color_channel",
   {
     description: "Setzt die Startfarbe eines Farbkanals. NICHT per Strg+Z rueckgaengig machbar; die alten Werte stehen in 'before'.",

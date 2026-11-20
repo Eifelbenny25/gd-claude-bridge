@@ -1,4 +1,5 @@
 #include "Commands.hpp"
+#include "bot/EditorBot.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -558,6 +559,15 @@ Result<matjson::Value> cmdSetColor(LevelEditorLayer* editor, matjson::Value cons
     }));
 }
 
+Result<matjson::Value> cmdBotAnalyze(LevelEditorLayer* editor, matjson::Value const&) {
+    std::vector<std::string> warns;
+    bot::Start start;
+    auto objects = bot::collectLevel(editor, start, warns);
+    auto r = bot::analyze(objects, start);
+    r.warnings.insert(r.warnings.begin(), warns.begin(), warns.end());
+    return Ok(bot::resultToJson(r));
+}
+
 std::string makeResponse(matjson::Value const& id, bool ok, matjson::Value payload) {
     if (ok) {
         return matjson::makeObject({{"id", id}, {"ok", true}, {"result", payload}}).dump(matjson::NO_INDENTATION);
@@ -598,6 +608,7 @@ std::string claude_bridge::handleRequest(std::string const& text) {
         {"modify_objects", &cmdModifyObjects},
         {"get_color_channels", &cmdGetColors},
         {"set_color_channel", &cmdSetColor},
+        {"bot_analyze", &cmdBotAnalyze},
     };
 
     auto it = handlers.find(cmd);
