@@ -17,6 +17,7 @@ constexpr int TPS = 240;
 
 enum class Kind : uint8_t {
     Solid,
+    Slope,                 // Schraege mit Boden oben (sy0/sy1 = Oberflaeche)
     Hazard,
     // Orbs (Klick noetig)
     OrbYellow, OrbPink, OrbRed, OrbBlue, OrbGreen, OrbBlack,
@@ -45,6 +46,7 @@ struct LevelObj {
     int objectId = 0;
     float x = 0, y = 0;      // Mitte (fuer Meldungen)
     float rotation = 0;      // fuer Dash-Orbs
+    float sy0 = 0, sy1 = 0;  // Schraege: Oberflaechen-y bei rect.x0 und rect.x1
 };
 
 struct Start {

@@ -559,6 +559,24 @@ Result<matjson::Value> cmdSetColor(LevelEditorLayer* editor, matjson::Value cons
     }));
 }
 
+Result<matjson::Value> cmdBotObjects(LevelEditorLayer* editor, matjson::Value const&) {
+    std::vector<std::string> warns;
+    bot::Start start;
+    auto objects = bot::collectLevel(editor, start, warns);
+    std::vector<matjson::Value> list;
+    for (auto const& o : objects) {
+        list.push_back(matjson::makeObject({
+            {"uid", o.uid}, {"id", o.objectId}, {"kind", bot::kindName(o.kind)},
+            {"x0", o.rect.x0}, {"y0", o.rect.y0 - 90.f}, {"x1", o.rect.x1}, {"y1", o.rect.y1 - 90.f},
+            {"sy0", o.sy0 - 90.f}, {"sy1", o.sy1 - 90.f},
+        }));
+    }
+    return Ok(matjson::makeObject({
+        {"startSpeed", start.speed}, {"objects", matjson::Value(list)},
+        {"note", "Hitboxen wie der Bot sie sieht, y in Level-Koordinaten (Boden = 0)."},
+    }));
+}
+
 Result<matjson::Value> cmdBotAnalyze(LevelEditorLayer* editor, matjson::Value const&) {
     std::vector<std::string> warns;
     bot::Start start;
@@ -609,6 +627,7 @@ std::string claude_bridge::handleRequest(std::string const& text) {
         {"get_color_channels", &cmdGetColors},
         {"set_color_channel", &cmdSetColor},
         {"bot_analyze", &cmdBotAnalyze},
+        {"bot_objects", &cmdBotObjects},
     };
 
     auto it = handlers.find(cmd);

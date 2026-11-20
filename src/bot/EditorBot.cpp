@@ -25,8 +25,10 @@ std::optional<Kind> classify(GameObject* obj) {
     switch (obj->m_objectType) {
         case T::Solid:
         case T::Breakable:
-        case T::Slope:            // Schraegen: vereinfacht als Block (Warnung)
             return Kind::Solid;
+        case T::Slope:
+            if (obj->m_slopeIsHazard) return Kind::Hazard;
+            return obj->slopeFloorTop() ? Kind::Slope : Kind::Solid;
         case T::Hazard:
         case T::AnimatedHazard:
             return Kind::Hazard;
@@ -98,7 +100,7 @@ std::vector<LevelObj> collectLevel(LevelEditorLayer* editor, Start& start,
             if (!kind) continue;
             if (obj->m_isNoTouch) continue;
             if (*kind == Kind::Solid && obj->m_isPassable) continue;
-            if (obj->m_objectType == GameObjectType::Slope) slope = true;
+            if (obj->m_objectType == GameObjectType::Slope && *kind == Kind::Solid) slope = true;
 
             CCRect r = obj->getObjectRect();
             if (r.size.width <= 0.f || r.size.height <= 0.f) continue;
@@ -110,10 +112,21 @@ std::vector<LevelObj> collectLevel(LevelEditorLayer* editor, Start& start,
             o.x = obj->getPositionX();
             o.y = obj->getPositionY();
             o.rotation = obj->getRotation();
+            if (o.kind == Kind::Slope) {
+                o.sy0 = static_cast<float>(obj->slopeYPos(o.rect.x0));
+                o.sy1 = static_cast<float>(obj->slopeYPos(o.rect.x1));
+                bool sane = o.sy0 >= o.rect.y0 - 1 && o.sy0 <= o.rect.y1 + 1 &&
+                            o.sy1 >= o.rect.y0 - 1 && o.sy1 <= o.rect.y1 + 1 &&
+                            std::abs(o.sy1 - o.sy0) > 1.f;
+                if (!sane) {
+                    o.sy0 = obj->m_slopeUphill ? o.rect.y0 : o.rect.y1;
+                    o.sy1 = obj->m_slopeUphill ? o.rect.y1 : o.rect.y0;
+                }
+            }
             out.push_back(o);
         }
     }
-    if (slope) warnings.push_back("Schraegen werden wie normale Bloecke behandelt.");
+    if (slope) warnings.push_back("Schraegen mit Boden unten (Decke) werden wie Bloecke behandelt.");
     if (triggers) warnings.push_back("Move-/Toggle-Trigger werden nicht simuliert (Objekte bleiben an ihrer Editor-Position).");
 
     start = Start{};

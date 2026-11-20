@@ -274,8 +274,54 @@ State step(World const& w, State s, bool action) {
             }
         }
     });
+    // Schraegen (nur Boden oben, normale Gravitation): GD rechnet mit der
+    // vorderen unteren Ecke des Spielers, darum Hoehe am hoeheren Ende der
+    // Spieler-Unterkante nehmen.
+    auto surfaceAt = [](LevelObj const& ob, float x) {
+        float t = (x - ob.rect.x0) / std::max(1.f, ob.rect.x1 - ob.rect.x0);
+        t = std::clamp(t, 0.f, 1.f);
+        return ob.sy0 + (ob.sy1 - ob.sy0) * t;
+    };
+    float vxNow = P.speeds[std::clamp<int>(s.speed, 0, 4)];
+    w.query(playerRect(s, P.half), [&](int, LevelObj const& ob) {
+        if (ob.kind != Kind::Slope) return;
+        float tanA = (ob.sy1 - ob.sy0) / std::max(1.f, ob.rect.x1 - ob.rect.x0);
+        if (up2 < 0) {
+            // umgedrehte Gravitation: Schraege wie Block behandeln
+            if (s.vy >= 0 && prevY + P.half <= ob.rect.y0 + P.landTolerance) {
+                s.y = ob.rect.y0 - P.half;
+                s.vy = 0;
+                s.ground = true;
+            }
+            return;
+        }
+        float surf = std::max(surfaceAt(ob, s.x - P.half), surfaceAt(ob, s.x + P.half));
+        float tol = P.landTolerance + vxNow * DT * std::abs(tanA) + 1.f;
+        float bottom = s.y - P.half;
+        if (bottom >= surf - tol && s.vy <= vxNow * tanA + 1.f) {
+            s.y = surf + P.half;
+            s.vy = vxNow * tanA;   // nach oben: Schwung beim Verlassen der Schraege
+            s.ground = true;
+        }
+    });
+
     w.query(playerRect(s, P.innerHalf), [&](int i, LevelObj const& ob) {
-        if (!s.dead && ob.kind == Kind::Solid) {
+        if (s.dead) return;
+        if (ob.kind == Kind::Slope) {
+            if (up2 < 0) {
+                s.dead = true;
+                s.killer = static_cast<int16_t>(i);
+                return;
+            }
+            float ib = s.y - P.innerHalf;
+            float surf = std::max(surfaceAt(ob, s.x - P.innerHalf), surfaceAt(ob, s.x + P.innerHalf));
+            if (ib < surf - 1.f) {
+                s.dead = true;
+                s.killer = static_cast<int16_t>(i);
+            }
+            return;
+        }
+        if (ob.kind == Kind::Solid) {
             s.dead = true;
             s.killer = static_cast<int16_t>(i);
         }
@@ -319,6 +365,7 @@ struct Search {
     float reachedX = 0;
     float deathX = -1e9f, deathY = 0;
     std::unordered_map<int, int> killerCount;              // nahe der weitesten Todesstelle
+    int furthestKiller = -1;
     bool pruned = false;
     long long explored = 0;
 
@@ -338,12 +385,14 @@ void recordDeath(Search& S, State const& d) {
     if (d.x > S.deathX + 45.f) {
         S.deathX = d.x;
         S.deathY = d.y;
+        S.furthestKiller = d.killer;
         S.killerCount.clear();
     }
     if (d.x >= S.deathX - 45.f && d.killer >= 0) S.killerCount[d.killer]++;
     if (d.x > S.deathX) {
         S.deathX = d.x;
         S.deathY = d.y;
+        S.furthestKiller = d.killer;
     }
 }
 
@@ -570,9 +619,13 @@ Result analyzeOnce(std::vector<LevelObj> const& objects, Start const& start,
     if (!R.possible) {
         R.deathX = S.deathX;
         R.deathY = S.deathY;
-        int best = -1, bestN = 0;
-        for (auto [k, n] : S.killerCount) {
-            if (n > bestN) { best = k; bestN = n; }
+        // Das Objekt an der weitesten Todesstelle ist das eigentliche Hindernis
+        int best = S.furthestKiller;
+        if (best < 0) {
+            int bestN = 0;
+            for (auto [k, n] : S.killerCount) {
+                if (n > bestN) { best = k; bestN = n; }
+            }
         }
         if (best >= 0) {
             R.killerUid = objects[best].uid;
@@ -613,6 +666,7 @@ Result analyzeOnce(std::vector<LevelObj> const& objects, Start const& start,
 char const* kindName(Kind k) {
     switch (k) {
         case Kind::Solid: return "Block";
+        case Kind::Slope: return "Schraege";
         case Kind::Hazard: return "Stachel/Gefahr";
         case Kind::OrbYellow: return "gelber Orb";
         case Kind::OrbPink: return "pinker Orb";
