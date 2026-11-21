@@ -117,6 +117,8 @@ Key keyOf(State const& s) {
     k.usedPad = s.usedPad;
     k.usedPortal = s.usedPortal;
     k.slope = s.slope;
+    // Schraegen: Absprung haengt von der Zeit auf der Schraege ab (bis 0.1 s)
+    k.pad0 = static_cast<int16_t>((s.onSlope || s.wasOnSlope) ? std::min<int>(s.slopeTicks, 25) : 0);
     uint32_t b = 0;
     auto put = [&](bool v) { b = (b << 1) | (v ? 1u : 0u); };
     // Ship/Wave: Klick-Merker spielen nur fuer Orbs eine Rolle -> weglassen
@@ -125,7 +127,7 @@ Key keyOf(State const& s) {
     put(simpleFly ? false : s.jumpUnused); put(simpleFly ? false : s.holdDelayed);
     put(simpleFly ? false : s.canRing); put(simpleFly ? false : s.canJump);
     put(simpleFly ? false : s.onGround); put(simpleFly ? false : s.isJumping); put(s.uncapped);
-    put(s.robotInvalid); put(s.dashing); put(s.onSlope); put(s.finished); put(s.stopped);
+    put(s.robotInvalid); put(s.dashing); put(s.onSlope); put(s.wasOnSlope); put(s.finished); put(s.stopped);
     put(s.sinceFlip < FLIP_GRACE_TICKS);
     b = (b << 3) | static_cast<uint32_t>(s.speed);
     b = (b << 3) | static_cast<uint32_t>(s.mode);
