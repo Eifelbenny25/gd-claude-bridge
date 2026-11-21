@@ -904,6 +904,13 @@ struct Search {
         return -1;
     }
 
+    // Nur genaues Nachschlagen (fuer die Wegwahl)
+    bool isGoodExact(int tick, State const& s) const {
+        if (tick < 0 || tick >= ticks() || s.dead) return false;
+        int j = find(tick, hashKey(keyOf(s)));
+        return j >= 0 && good[tick][j] != 0;
+    }
+
     bool isGood(int tick, State const& s) const {
         if (tick < 0 || tick >= ticks()) return false;
         if (s.dead) return false;
@@ -1126,18 +1133,21 @@ void extractClicks(World const& w, Search const& S, State start, Result& R, std:
         std::vector<Win> wins;
         int needAt = -1;
         bool reachedEnd = false;
+        std::vector<char> exactOk;      // Index u - t: Druecken bei u fuehrt sicher ans Ziel
         int u = t;
         for (;; ++u) {
             State const& s = idle.back();
             if (s.terminal()) { reachedEnd = true; break; }
             if (u - t > limit) break;
-            bool pg = S.isGood(u + 1, step(w, s, true));
+            State pressed = step(w, s, true);
+            bool pg = S.isGood(u + 1, pressed);
+            exactOk.push_back(S.isGoodExact(u + 1, pressed) ? 1 : 0);
             if (pg) {
                 if (!wins.empty() && wins.back().b == u - 1) wins.back().b = u;
                 else wins.push_back({u, u});
             }
             State n = step(w, s, false);
-            if (n.dead || !S.isGood(u + 1, n)) {
+            if (n.dead || !S.isGoodExact(u + 1, n)) {
                 needAt = u;
                 break;
             }
@@ -1165,6 +1175,27 @@ void extractClicks(World const& w, Search const& S, State start, Result& R, std:
             if (wn.b - wn.a > wsel.b - wsel.a) wsel = wn;
         }
         int c = (wsel.a + wsel.b) / 2;
+        // Der gewaehlte Tick muss sicher ans Ziel fuehren: sonst den naechsten
+        // sicheren Tick nehmen (erst im gewaehlten Fenster, dann in allen).
+        auto okAt = [&](int tick) { return tick >= t && tick - t < static_cast<int>(exactOk.size()) && exactOk[tick - t]; };
+        if (!okAt(c)) {
+            int bestTick = -1, bestDist = 1 << 30;
+            for (auto const& wn : wins) {
+                for (int q = wn.a; q <= wn.b; ++q) {
+                    if (!okAt(q)) continue;
+                    int d = std::abs(q - c) + ((q < wsel.a || q > wsel.b) ? 100000 : 0);
+                    if (d < bestDist) { bestDist = d; bestTick = q; }
+                }
+            }
+            if (bestTick < 0) {
+                for (int q = t; q <= needAt; ++q) if (okAt(q)) { bestTick = q; }
+            }
+            if (bestTick >= 0) {
+                c = bestTick;
+                for (auto const& wn : wins) if (c >= wn.a && c <= wn.b) wsel = wn;
+                if (c < wsel.a || c > wsel.b) wsel = {c, c};
+            }
+        }
         State const& before = idle[c - t];
         Click k;
         k.tick = c;
